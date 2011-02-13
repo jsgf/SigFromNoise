@@ -1,0 +1,221 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+import Control.Monad
+import Control.Monad.Trans
+import Control.Applicative ((<$>), (<*>), (<|>), empty, pure)
+
+import qualified Data.Attoparsec as A
+import qualified Data.Attoparsec.Enumerator as AE
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Types as Aeson
+import Data.Aeson.Types ((.=), (.:), (.:?), FromJSON(..), ToJSON(..))
+import qualified Data.Aeson.Parser as Aeson
+import qualified Data.Enumerator as DE
+import qualified Data.Text as T
+import qualified Data.Vector as V
+import Data.Maybe (fromJust, catMaybes)
+
+import qualified Data.Time.Format as DT
+import qualified Data.Time.Clock as DT
+import System.Locale (defaultTimeLocale)
+
+import Network.URI
+import qualified Network.HTTP.Enumerator as HE
+import qualified Network.Wai as W
+
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Char8 as C8
+import qualified Data.ByteString.Base64 as B64
+
+
+(.=?) :: ToJSON a => T.Text -> Maybe a -> Maybe Aeson.Pair
+_ .=? Nothing = Nothing
+name .=? (Just x) = Just $ name .= x
+
+object' a b = Aeson.object $ a ++ catMaybes b
+
+instance FromJSON URI where
+    parseJSON (Aeson.String v) = case (parseURI . T.unpack) v of
+                             Just uri -> pure uri
+                             Nothing -> fail "Invalid URI"
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON URI where
+    toJSON = toJSON . show
+
+data TweetURL = TweetURL { url :: URI
+                         , displayUrl :: Maybe T.Text
+                         , longUrl :: Maybe URI
+                         }
+                deriving (Eq, Show)
+
+instance FromJSON TweetURL where
+    parseJSON (Aeson.Object v) = TweetURL <$> v .: "url"
+                                   <*> v .:? "display_url"
+                                   <*> v .:? "expanded_url"
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON TweetURL where
+    toJSON u = object' [ "url" .= url u ] [ "display_url" .=? displayUrl u
+                                          , "expanded_url" .=? longUrl u ]
+
+newtype TweetHashtag = TweetHashtag { text :: T.Text }
+    deriving (Eq, Show)
+
+instance FromJSON TweetHashtag where
+    parseJSON (Aeson.Object v) = TweetHashtag <$> v .: "text"
+    parseJSON _ = fail "Wrong thing"
+
+newtype TwitterID = TwitterID { twitterid :: Integer }
+    deriving (Show, Eq)
+
+-- Parse a string or number into an ID, but Strings are preferable
+-- because Aeson looses precision on large Integers by using Round
+instance FromJSON TwitterID where
+    parseJSON (Aeson.String v) = pure $ TwitterID $ (read . T.unpack) v
+    parseJSON (Aeson.Number v) = pure $ TwitterID $ floor v
+    parseJSON _ = fail "Wrong thing"
+
+-- Aeson can't currently deal with large Integer Twitter IDs, so
+-- generate a string
+instance ToJSON TwitterID where
+    toJSON = toJSON . show . twitterid
+
+instance ToJSON TweetHashtag where
+    toJSON t = Aeson.object [ "text" .= text t ]
+
+data TwitterUser = TwitterUser { tu_screen_name :: T.Text
+                               , tu_name :: T.Text
+                               , tu_id :: TwitterID
+                               , tu_url :: Maybe URI
+                               , tu_location :: Maybe T.Text
+                               , tu_verified :: Bool
+                               } deriving (Eq, Show)
+
+instance FromJSON TwitterUser where
+    parseJSON (Aeson.Object v) = TwitterUser <$> v .: "screen_name"
+                                        <*> v .: "name"
+                                        <*> v .: "id_str"
+                                        <*> v .:? "url"
+                                        <*> v .:? "location"
+                                        <*> (v .: "verified" <|> pure False)
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON TwitterUser where
+    toJSON t = object' [ "screen_name" .= tu_screen_name t
+                       , "name" .= tu_name t
+                       , "id_str" .= tu_id t ]
+                            [ "url" .=? tu_url t ]
+
+data TweetRange = TweetRange Int Int
+                  deriving (Eq, Show)
+
+instance ToJSON TweetRange where
+    toJSON (TweetRange a b) = toJSON [a, b]
+
+data TweetEntities = TweetEntities { te_urls :: [ TweetURL ]
+                                   , te_hashtags :: [ TweetHashtag ] 
+                                   , te_mentions :: [ TwitterUser ]
+                                   } deriving (Eq, Show)
+
+instance FromJSON TweetEntities where
+    parseJSON (Aeson.Object v) = TweetEntities <$> v .: "urls"
+                                               <*> v .: "hashtags"
+                                               <*> v .: "user_mentions"
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON TweetEntities where
+    toJSON v = Aeson.object [ "urls" .= te_urls v
+                            , "hashtags" .= te_hashtags v
+                            , "user_mentions" .= te_mentions v
+                            ]
+
+newtype TwitterTime = TwitterTime { timedate :: DT.UTCTime }
+    deriving (Eq, Show)
+
+timeformat = "%a %b %d %X %Z %Y"
+
+instance FromJSON TwitterTime where
+    -- "Sun Feb 13 21:56:36 +0000 2011"
+    parseJSON (Aeson.String t) = case DT.parseTime defaultTimeLocale timeformat (T.unpack t) of
+                                   Just x -> pure $ TwitterTime x
+                                   Nothing -> fail "Bad date/time"
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON TwitterTime where
+    toJSON v = toJSON $ DT.formatTime defaultTimeLocale timeformat (timedate v)
+
+data Tweet = Tweet { t_id :: TwitterID
+                   , t_source :: T.Text
+                   , t_user :: TwitterUser
+                   , t_truncated :: Bool
+                   , t_entities :: TweetEntities
+                   , t_text :: T.Text
+                   , t_created_at :: TwitterTime
+                   , t_reply_status :: Maybe TwitterID
+                   , t_reply_user :: Maybe TwitterID
+                   , t_reply_screenname :: Maybe T.Text
+                   } deriving (Eq, Show)
+
+instance FromJSON Tweet where
+    parseJSON (Aeson.Object v) = Tweet <$> v .: "id_str"
+                                       <*> v .: "source"
+                                       <*> v .: "user"
+                                       <*> v .: "truncated"
+                                       <*> (v .: "entities" <|> pure (TweetEntities [] [] []))
+                                       <*> v .: "text"
+                                       <*> v .: "created_at"
+                                       <*> v .:? "in_reply_to_status_id"
+                                       <*> v .:? "in_reply_to_user_id"
+                                       <*> v .:? "in_reply_to_screen_name"
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON Tweet where
+    toJSON v = Aeson.object [ "id_str" .= t_id v
+                            , "source" .= t_source v
+                            , "user" .= t_user v
+                            , "text" .= t_text v
+                            , "created_at" .= t_created_at v
+                            , "entities" .= t_entities v
+                            , "truncated" .= t_truncated v
+                            , "in_reply_to_status_id" .= t_reply_status v
+                            , "in_reply_to_user_id" .= t_reply_user v
+                            , "in_reply_to_screen_name" .= t_reply_screenname v
+                            ]
+
+data TweetDelete  = TweetDelete { td_statusid :: TwitterID
+                                , td_userid :: TwitterID
+                                } deriving (Eq, Show)
+
+{-
+instance FromJSON TweetDelete where
+    parseJSON (Aeson.Object v) = (v .: "delete") >>= (v .: "status") >>= 
+                                        TweetDelete <$> v .: "id_str" <*> v .: "user_id_str"
+-}
+
+basicauth :: String -> String -> HE.Request -> HE.Request
+basicauth u p r = r { HE.requestHeaders = basicauthhdr u p : HE.requestHeaders r }
+
+basicauthhdr u p = (W.mkCIByteString "authorization", C8.concat [ "Basic ", auth ])
+    where auth = B64.encode $ C8.concat $ map C8.pack [ u, ":",  p ]
+
+httpiter st _ | st == W.status200 = go
+              | otherwise =
+                  DE.throwError $ HE.StatusCodeException (W.statusCode st) (LBS.fromChunks [W.statusMessage st])
+  where
+    go = do
+        eof <- DE.isEOF
+        if eof
+          then return ()
+          else do
+            x <- AE.iterParser Aeson.json
+            case Aeson.fromJSON x :: Aeson.Result Tweet of
+              Aeson.Success a -> do
+                 liftIO $ Prelude.putStrLn $ show a
+              Aeson.Error e -> liftIO $ Prelude.putStrLn $ "Failed: " ++ show x ++ " -> " ++ e
+        go
+
+main = do
+  request <- basicauth "SignalsFromNois" "R4sytW7XHs" <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
+  DE.run_ $ HE.httpRedirect request httpiter
