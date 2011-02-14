@@ -14,6 +14,8 @@ import Network.URI (URI(..), parseURI)
 
 import Control.Applicative ((<$>), (<*>), (<|>), pure)
 
+import Data.Monoid
+
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as Aeson
 import Data.Aeson.Types ((.=), (.:), (.:?), FromJSON(..), ToJSON(..))
@@ -88,6 +90,7 @@ data TwitterUser = TwitterUser { tu_screen_name :: T.Text
                                , tu_url :: Maybe URI
                                , tu_location :: Maybe T.Text
                                , tu_verified :: Bool
+                               , tu_protected :: Bool
                                } deriving (Eq, Show)
 
 instance FromJSON TwitterUser where
@@ -97,12 +100,16 @@ instance FromJSON TwitterUser where
                                              <*> v .:? "url"
                                              <*> v .:? "location"
                                              <*> (v .: "verified" <|> pure False)
+                                             <*> (v .: "protected" <|> pure False)
     parseJSON _ = fail "Wrong thing"
 
 instance ToJSON TwitterUser where
     toJSON t = object' [ "screen_name" .= tu_screen_name t
                        , "name" .= tu_name t
-                       , "id_str" .= tu_id t ]
+                       , "id_str" .= tu_id t
+                       , "location" .= tu_location t
+                       , "verified" .= tu_verified t
+                       , "protected" .= tu_protected t ]
                             [ "url" .=? tu_url t ]
 
 data TweetRange = TweetRange Int Int
@@ -153,6 +160,7 @@ data Tweet = Tweet { t_id :: TwitterID
                    , t_reply_status :: Maybe TwitterID
                    , t_reply_user :: Maybe TwitterID
                    , t_reply_screenname :: Maybe T.Text
+                   , t_retweet :: Maybe Tweet
                    } deriving (Eq, Show)
 
 instance FromJSON Tweet where
@@ -166,20 +174,26 @@ instance FromJSON Tweet where
                                        <*> v .:? "in_reply_to_status_id"
                                        <*> v .:? "in_reply_to_user_id"
                                        <*> v .:? "in_reply_to_screen_name"
+                                       <*> v .:? "retweeted_status"
     parseJSON _ = fail "Wrong thing"
 
 instance ToJSON Tweet where
-    toJSON v = Aeson.object [ "id_str" .= t_id v
-                            , "source" .= t_source v
-                            , "user" .= t_user v
-                            , "text" .= t_text v
-                            , "created_at" .= t_created_at v
-                            , "entities" .= t_entities v
-                            , "truncated" .= t_truncated v
-                            , "in_reply_to_status_id" .= t_reply_status v
-                            , "in_reply_to_user_id" .= t_reply_user v
-                            , "in_reply_to_screen_name" .= t_reply_screenname v
-                            ]
+    toJSON v = object' [ "id_str" .= t_id v
+                       , "source" .= t_source v
+                       , "user" .= t_user v
+                       , "text" .= t_text v
+                       , "created_at" .= t_created_at v
+                       , "entities" .= t_entities v
+                       , "truncated" .= t_truncated v ]
+                       [ "in_reply_to_status_id" .=? t_reply_status v
+                       , "in_reply_to_user_id" .=? t_reply_user v
+                       , "in_reply_to_screen_name" .=? t_reply_screenname v
+                       , "retweeted_status" .=? t_retweet v
+                       ]
+
+instance Monoid Tweet where
+    mappend a _ = a
+    mempty = undefined
 
 data TweetDelete  = TweetDelete { td_statusid :: TwitterID
                                 , td_userid :: TwitterID
