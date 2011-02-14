@@ -10,7 +10,7 @@ module Network.Twitter.Types
     , Tweet(..)
     ) where
 
-import Network.URI
+import Network.URI (URI(..), parseURI)
 
 import Control.Applicative ((<$>), (<*>), (<|>), pure)
 
