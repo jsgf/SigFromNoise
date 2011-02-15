@@ -1,7 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+module Main (main) where
+
+import System (getArgs)
+
 import Control.Monad
-import Control.Monad.Trans (liftIO)
+import Control.Monad.Trans (MonadIO, liftIO)
+import Control.Monad.Loops (whileM_)
 import Control.Applicative ((<$>), (<*>), (<|>), empty, pure)
 import Control.Arrow (first, second, (***))
 
@@ -44,13 +49,7 @@ basicauthhdr u p = (W.mkCIByteString "authorization", C8.concat [ "Basic ", auth
 stashTweet c t = R.put c "Tweets" key Nothing t R.One R.One
     where key = LC8.pack . show . twitterid . t_id $ t
 
-untilDone' p f = do
-  done <- p
-  if done
-    then return ()
-    else f >> untilDone f
-
-untilDone = untilDone' DE.isEOF
+untilDone = whileM_ $ liftM not DE.isEOF
 
 httpiter conn st _ | st == W.status200 = untilDone go
                    | otherwise = DE.throwError $ HE.StatusCodeException (W.statusCode st) (LBS.fromChunks [W.statusMessage st])
@@ -69,9 +68,10 @@ httpiter conn st _ | st == W.status200 = untilDone go
               Aeson.Error e -> liftIO $ putStrLn $ "Failed: " ++ show x ++ " -> " ++ e
 
 main = do
+  args <- getArgs
   r_conn <- R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
-  request <- basicauth "SignalsFromNois" "R4sytW7XHs" <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
-  withSocketsDo . HE.withHttpEnumerator $ DE.run_ $ HE.httpRedirect request (httpiter r_conn)
+  request <- basicauth (args !! 0) (args !! 1) <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
+  withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
 
 -- Convert a Network.OAuth.Http.Request into a Network.HTTP.Enumerator.Request
 -- What. A. Pain.
