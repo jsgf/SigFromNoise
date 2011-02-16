@@ -107,6 +107,10 @@ deleteall :: R.Connection -> R.Bucket -> IO ()
 deleteall c b = do keys <- allkeys c b
                    deletekeys c b keys
 
+countkeys :: R.Connection -> R.Bucket -> IO Int
+countkeys c b = do keys <- allkeys c b
+                   return $ length keys
+
 {-
 -- Convert a Network.OAuth.Http.Request into a Network.HTTP.Enumerator.Request
 -- What. A. Pain.
