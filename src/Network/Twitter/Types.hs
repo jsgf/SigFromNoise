@@ -192,7 +192,7 @@ instance ToJSON Tweet where
                        ]
 
 instance Monoid Tweet where
-    mappend a _ = a
+    mappend = const
     mempty = undefined
 
 data TweetDelete  = TweetDelete { td_statusid :: TwitterID
