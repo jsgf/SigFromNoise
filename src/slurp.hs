@@ -9,10 +9,12 @@ import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Loops (whileM_)
 import Control.Applicative ((<$>), (<*>), (<|>), empty, pure)
 import Control.Arrow (first, second, (***))
+import Data.Monoid (Monoid(..))
 
 import qualified Data.Attoparsec.Enumerator as AE
 
 import qualified Data.Aeson as Aeson
+import           Data.Aeson ((.:), (.=))
 
 import qualified Data.Enumerator as DE
 
@@ -66,11 +68,32 @@ httpiter conn st _ | st == W.status200 = untilDone go
                                    return ()
               Aeson.Error e -> liftIO $ putStrLn $ "Failed: " ++ show x ++ " -> " ++ e
 
+data BasicAuth = BasicAuth { ba_user :: String
+                           , ba_pass :: String
+                           } deriving (Eq, Show)
+
+instance Aeson.FromJSON BasicAuth where
+    parseJSON (Aeson.Object v) = BasicAuth <$> v .: "user" <*> v .: "pass"
+    parseJSON _ = fail "Wrong thing"
+
+instance Aeson.ToJSON BasicAuth where
+    toJSON v = Aeson.object [ "user" .= ba_user v, "pass" .= ba_pass v]
+
+instance Monoid BasicAuth where
+    mappend = const
+    mempty = undefined
+
 main = do
   args <- getArgs
   r_conn <- R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
-  request <- basicauth (args !! 0) (args !! 1) <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
-  withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
+
+  auth <- R.get r_conn "admin" "basicauth" R.Default
+  case auth of
+    Just (a, _) -> do
+              request <- basicauth (ba_user a) (ba_pass a) <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
+              withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
+
+    Nothing -> putStrLn "Can't find auth details in admin/basicauth"
 
 {-
 -- Convert a Network.OAuth.Http.Request into a Network.HTTP.Enumerator.Request
