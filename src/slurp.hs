@@ -2,16 +2,13 @@
 
 module Main (main) where
 
-import System (getArgs)
+import System.Environment (getArgs)
 
 import Control.Monad
 import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Loops (whileM_)
 import Control.Applicative ((<$>), (<*>), (<|>), empty, pure)
 import Control.Arrow (first, second, (***))
-
-import Control.Failure
-import Control.Exception (SomeException)
 
 import qualified Data.Attoparsec.Enumerator as AE
 
@@ -28,7 +25,6 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LC8
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Base64 as B64
-import qualified Text.Show.ByteString as BS
 import qualified Network.Riak as R
 import qualified Network.Riak.Types as R
 
