@@ -10,6 +10,9 @@ import Control.Monad.Loops (whileM_)
 import Control.Applicative ((<$>), (<*>), (<|>), empty, pure)
 import Control.Arrow (first, second, (***))
 
+import Control.Failure
+import Control.Exception (SomeException)
+
 import qualified Data.Attoparsec.Enumerator as AE
 
 import qualified Data.Aeson as Aeson
@@ -73,6 +76,7 @@ main = do
   request <- basicauth (args !! 0) (args !! 1) <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
   withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
 
+{-
 -- Convert a Network.OAuth.Http.Request into a Network.HTTP.Enumerator.Request
 -- What. A. Pain.
 http_cvt_request :: O.Request -> HE.Request
@@ -98,3 +102,23 @@ http_cvt_response her = O.RspHttp status reason headers payload
 mappair f (a,b) = (f a, f b)
 packpair = mappair C8.pack
 unpackpair = mappair C8.unpack
+
+newtype HttpOAuthStream a m b = HttpOAuthStream { iter :: W.Status -> W.ResponseHeaders -> DE.Iteratee a m b }
+
+instance MonadIO m => O.HttpClient (HttpOAuthStream a m b) where
+    --   runClient :: (MonadIO m) => c -> Request -> m (Either String Response)
+    runClient c r = liftM cvt $ DE.run $ HE.http (http_cvt_request r) (iter c)
+        where
+          cvt :: Show a => Either a HE.Response -> Either String O.Response
+          cvt (Left a) = Left $ show a
+          cvt (Right r) = Right $ http_cvt_response r
+
+data HttpOAuth = HttpOAuth { }
+
+instance O.HttpClient HttpOAuth where
+    runClient c r = (HE.httpLbs . http_cvt_request) r >>= return . cvt
+        where 
+          cvt :: HE.Response -> Either String O.Response
+          cvt r@(HE.Response st _ b) | 200 <= st && st < 300 = Right $ http_cvt_response r
+                                     | otherwise             = Left $ "HTTP status" ++ show st
+-}
