@@ -59,7 +59,7 @@ httpiter conn st _ | st == W.status200 = untilDone go
             x <- AE.iterParser Aeson.json
             case Aeson.fromJSON x :: Aeson.Result Tweet of
               Aeson.Success a -> liftIO $ do
-                                   -- putStrLn $ show a
+                                   --putStrLn $ show a
                                    putStrLn $ "Stashing tweet " ++
                                           (show . twitterid . t_id $ a) ++ " (" ++
                                           (T.unpack . tu_name . t_user $ a) ++ "): " ++
@@ -94,6 +94,16 @@ main = do
               withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
 
     Nothing -> putStrLn "Can't find auth details in admin/basicauth"
+
+allkeys :: R.Connection -> R.Bucket -> IO [R.Key]
+allkeys conn bucket = R.foldKeys conn bucket (\a k -> return (k:a)) []
+
+deletekeys :: R.Connection -> R.Bucket -> [R.Key] -> IO ()
+deletekeys conn bucket = mapM_ $ \k -> R.delete conn bucket k R.Default
+
+deleteall :: R.Connection -> R.Bucket -> IO ()
+deleteall c b = do keys <- allkeys c b
+                   deletekeys c b keys
 
 {-
 -- Convert a Network.OAuth.Http.Request into a Network.HTTP.Enumerator.Request
