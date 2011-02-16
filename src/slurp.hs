@@ -83,9 +83,11 @@ instance Monoid BasicAuth where
     mappend = const
     mempty = undefined
 
+raik_conn = R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
+
 main = do
   args <- getArgs
-  r_conn <- R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
+  r_conn <- raik_conn
 
   auth <- R.get r_conn "admin" "basicauth" R.Default
   case auth of
