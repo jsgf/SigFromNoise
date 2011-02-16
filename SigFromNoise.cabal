@@ -53,7 +53,7 @@ Executable SigFromNoise
   
   -- Packages needed in order to build this package.
   Build-depends:       
-        base,
+        base == 4.*,
         hoauth,
         old-locale,
         time,
