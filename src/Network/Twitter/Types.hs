@@ -84,11 +84,10 @@ instance ToJSON TwitterID where
 instance ToJSON TweetHashtag where
     toJSON t = Aeson.object [ "text" .= text t ]
 
+-- Short form user info
 data TwitterUser = TwitterUser { tu_screen_name :: T.Text
                                , tu_name :: T.Text
                                , tu_id :: TwitterID
-                               , tu_url :: Maybe URI
-                               , tu_location :: Maybe T.Text
                                , tu_verified :: Bool
                                , tu_protected :: Bool
                                } deriving (Eq, Show)
@@ -97,20 +96,122 @@ instance FromJSON TwitterUser where
     parseJSON (Aeson.Object v) = TwitterUser <$> v .: "screen_name"
                                              <*> v .: "name"
                                              <*> v .: "id_str"
-                                             <*> v .:? "url"
-                                             <*> v .:? "location"
                                              <*> (v .: "verified" <|> pure False)
                                              <*> (v .: "protected" <|> pure False)
     parseJSON _ = fail "Wrong thing"
 
 instance ToJSON TwitterUser where
-    toJSON t = object' [ "screen_name" .= tu_screen_name t
-                       , "name" .= tu_name t
-                       , "id_str" .= tu_id t
-                       , "location" .= tu_location t
-                       , "verified" .= tu_verified t
-                       , "protected" .= tu_protected t ]
-                            [ "url" .=? tu_url t ]
+    toJSON t = Aeson.object [ "screen_name" .= tu_screen_name t
+                            , "name" .= tu_name t
+                            , "id_str" .= tu_id t
+                            , "verified" .= tu_verified t
+                            , "protected" .= tu_protected t ]
+
+type Color = T.Text
+
+-- More verbose details about user
+data TwitterUserProfile = TwitterUserProfile { tup_id :: TwitterID
+
+                                             , tup_screen_name :: T.Text
+                                             , tup_name :: T.Text
+                                             , tup_description :: T.Text
+                                             , tup_url :: Maybe URI
+                                             , tup_time_zone :: T.Text
+                                             , tup_location :: T.Text
+
+                                             , tup_protected :: Bool
+                                             , tup_show_all_inline_media :: Bool
+                                             , tup_verified :: Bool
+
+                                             , tup_followers_count :: Int
+                                             , tup_statuses_count :: Int
+
+                                             , tup_geo_enabled :: Bool
+                                             , tup_lang :: T.Text
+                                             , tup_listed_count :: Int
+
+                                             , tup_profile_background_color :: Color
+                                             , tup_profile_background_image_url :: Maybe URI
+                                             , tup_profile_background_tile :: Bool
+                                             , tup_profile_sidebar_border_color :: Color
+                                             , tup_profile_sidebar_fill_color :: Color
+                                             , tup_profile_sidebar_text_color :: Color
+
+                                             , tup_profile_color :: Color
+                                             , tup_profile_link_color :: Color
+                                             , tup_profile_text_color :: Color
+                                             , tup_profile_image_url :: Maybe URI
+                                             , tup_profile_use_background_image :: Bool
+
+                                             } deriving (Show,Eq)
+
+instance FromJSON TwitterUserProfile where
+    parseJSON (Aeson.Object v) = TwitterUserProfile
+                                     <$> v .: "id_str"
+
+                                     <*> v .: "screen_name"
+                                     <*> v .: "name"
+                                     <*> v .: "description"
+                                     <*> (v .:? "url"  <|> pure Nothing)
+                                     <*> v .: "time_zone"
+                                     <*> v .: "location"
+
+                                     <*> v .: "protected"
+                                     <*> v .: "show_all_inline_media"
+                                     <*> v .: "verified"
+
+                                     <*> v .: "followers_count"
+                                     <*> v .: "statuses_count"
+                                     <*> v .: "geo_enabled"
+                                     <*> v .: "lang"
+                                     <*> v .: "listed_count"
+
+                                     <*> v .: "profile_background_color"
+                                     <*> v .:? "profile_background_image_url"
+                                     <*> v .: "profile_background_tile"
+                                     <*> v .: "profile_sidebar_border_color"
+                                     <*> v .: "profile_sidebar_fill_color"
+                                     <*> v .: "profile_sidebar_text_color"
+
+                                     <*> v .: "profile_color"
+                                     <*> v .: "profile_link_color"
+                                     <*> v .: "profile_text_color"
+                                     <*> v .:? "profile_image_url"
+                                     <*> v .: "profile_use_background_image"
+    parseJSON _ = fail "Wrong thing"
+
+instance ToJSON TwitterUserProfile where
+    toJSON t = Aeson.object [ "id_str" .= tup_id t
+
+                            , "screen_name" .= tup_screen_name t
+                            , "name" .= tup_name t
+                            , "description" .= tup_description t
+                            , "url" .= tup_url t
+                            , "time_zone" .= tup_time_zone t
+                            , "location" .= tup_location t
+
+                            , "protected" .= tup_protected t
+                            , "show_all_inline_media" .= tup_show_all_inline_media t
+                            , "verified" .= tup_verified t
+
+                            , "followers_count" .= tup_followers_count t
+                            , "statuses_count" .= tup_statuses_count t
+                            , "geo_enabled" .= tup_geo_enabled t
+                            , "lang" .= tup_lang t
+
+                            , "profile_background_color" .= tup_profile_background_color t
+                            , "profile_background_image_url" .= tup_profile_background_image_url t
+                            , "profile_background_tile" .= tup_profile_background_tile t
+                            , "profile_sidebar_border_color" .= tup_profile_sidebar_border_color t
+                            , "profile_sidebar_fill_color" .= tup_profile_sidebar_fill_color t
+                            , "profile_sidebar_text_color" .= tup_profile_sidebar_text_color t
+
+                            , "profile_color" .= tup_profile_color t
+                            , "profile_link_color" .= tup_profile_link_color t
+                            , "profile_text_color" .= tup_profile_text_color t
+                            , "profile_image_url" .= tup_profile_image_url t
+                            , "profile_use_background_image" .= tup_profile_use_background_image t
+                            ]
 
 data TweetRange = TweetRange Int Int
                   deriving (Eq, Show)
