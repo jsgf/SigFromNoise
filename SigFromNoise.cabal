@@ -68,7 +68,8 @@ Executable SigFromNoise
         http-enumerator,
         attoparsec-enumerator,
         monad-loops,
-        mtl
+        mtl,
+        containers
   
   -- Modules not exported by this package.
   -- Other-modules:       

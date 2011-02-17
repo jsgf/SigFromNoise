@@ -15,12 +15,14 @@ import qualified Data.Attoparsec.Enumerator as AE
 
 import qualified Data.Aeson as Aeson
 import           Data.Aeson ((.:), (.=))
+import qualified Data.Map as M
 
 import qualified Data.Enumerator as DE
 
 import Network (withSocketsDo)
 import qualified Network.HTTP.Enumerator as HE
 import qualified Network.Wai as W
+import Network.URI (escapeURIString)
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -33,6 +35,7 @@ import qualified Network.Riak.Types as R
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.List
+import Data.Maybe (fromMaybe)
 
 import Network.Twitter.Types
 
@@ -47,26 +50,69 @@ basicauth u p r = r { HE.requestHeaders = basicauthhdr u p : HE.requestHeaders r
 basicauthhdr u p = (W.mkCIByteString "authorization", C8.concat [ "Basic ", auth ])
     where auth = B64.encode $ C8.concat $ map C8.pack [ u, ":",  p ]
 
-stashTweet c t = R.put c "Tweets" key Nothing t R.One R.One
-    where key = LC8.pack . show . twitterid . t_id $ t
+idToKey :: TwitterID -> R.Key
+idToKey = LC8.pack . show . twitterid
+
+tweetKey :: Tweet -> R.Key
+tweetKey = idToKey . t_id
+
+userProfileKey :: TwitterUserProfile -> R.Key
+userProfileKey = idToKey . tup_id
+
+userKey :: TwitterUser -> R.Key
+userKey = idToKey . tu_id
+
+{-
+  Store tweet to database, along with extra info:
+  - Tweets/: TweetID -> Tweet           -- tweets themselves
+  - TweetUsers/: UserID -> [TweetID]    -- users who actually tweet (?RT?)
+  - TweetMentions/: UserID -> [TweetID] -- users mentioned in tweets
+  - TweetURLs/: URL -> [TweetID]        -- urls referenced by tweets
+
+  This should probably use Riak links for better querying...
+-}
+stashTweet :: R.Connection -> Tweet -> IO ()
+stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing t R.Default R.Default
+                    R.put c "TweetUsers" (userKey user) Nothing tweetid R.Default R.Default
+                    R.putMany c "TweetMentions" mentions R.Default R.Default
+                    R.putMany c "TweetURLs" urls R.Default R.Default
+                    return ()
+                    where user = t_user t
+                          tweetid = [t_id t]
+                          mentions = [ (userKey u, Nothing, tweetid) | u <- (te_mentions . t_entities) t ]
+                          urls = [ (urlkey $ besturl u, Nothing, tweetid) | u <- (te_urls . t_entities) t ]
+                          urlkey = LC8.pack . (escapeURIString (/='/')) . show
+                          besturl u = fromMaybe (url u) (expandedUrl u)
 
 untilDone = whileM_ $ liftM not DE.isEOF
+
+(.>) :: Aeson.Value -> T.Text -> Aeson.Value
+(Aeson.Object o) .> k = case M.lookup k o of
+                          Nothing -> Aeson.Null
+                          Just v -> v
+_ .> _ = Aeson.Null
 
 httpiter conn st _ | st == W.status200 = untilDone go
                    | otherwise = DE.throwError $ HE.StatusCodeException (W.statusCode st) (LBS.fromChunks [W.statusMessage st])
     where
       go = do
             x <- AE.iterParser Aeson.json
-            case Aeson.fromJSON x :: Aeson.Result Tweet of
-              Aeson.Success a -> liftIO $ do
-                                   --putStrLn $ show a
-                                   putStrLn $ "Stashing tweet " ++
-                                          (show . twitterid . t_id $ a) ++ " (" ++
-                                          (T.unpack . tu_name . t_user $ a) ++ "): " ++
-                                          (T.unpack . t_text $ a)
-                                   stashTweet conn a
-                                   return ()
-              Aeson.Error e -> liftIO $ putStrLn $ "Failed: " ++ show x ++ " -> " ++ e
+
+            case x .> "delete" .> "status" .> "id_str" of
+              (Aeson.String str) -> liftIO $ do
+                                      putStrLn $ "Delete status " ++ show str
+                                      deletekeys conn "Tweets" [key]
+                                             where key =  (LC8.pack . T.unpack) str
+              _ -> case Aeson.fromJSON x :: Aeson.Result Tweet of
+                     Aeson.Success a -> liftIO $ do
+                                          --putStrLn $ show a
+                                          putStrLn $ "Stashing tweet " ++
+                                                 (show . twitterid . t_id $ a) ++ " (" ++
+                                                 (T.unpack . tu_name . t_user $ a) ++ "): " ++
+                                                 (T.unpack . t_text $ a)
+                                          stashTweet conn a
+                                          return ()
+                     Aeson.Error e -> liftIO $ putStrLn $ "Failed: " ++ show x ++ " -> " ++ e
 
 data BasicAuth = BasicAuth { ba_user :: String
                            , ba_pass :: String
@@ -83,11 +129,11 @@ instance Monoid BasicAuth where
     mappend = const
     mempty = undefined
 
-raik_conn = R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
+riak_conn = R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
 
 main = do
   args <- getArgs
-  r_conn <- raik_conn
+  r_conn <- riak_conn
 
   auth <- R.get r_conn "admin" "basicauth" R.Default
   case auth of

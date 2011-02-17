@@ -5,6 +5,7 @@ module Network.Twitter.Types
     , TweetHashtag(..)
     , TwitterID(..)
     , TwitterUser(..)
+    , TwitterUserProfile(..)
     , TweetEntities(..)
     , TwitterTime(..)
     , Tweet(..)
@@ -45,7 +46,7 @@ instance ToJSON URI where
 
 data TweetURL = TweetURL { url :: URI
                          , displayUrl :: Maybe T.Text
-                         , longUrl :: Maybe URI
+                         , expandedUrl :: Maybe URI
                          }
                 deriving (Eq, Show)
 
@@ -57,7 +58,7 @@ instance FromJSON TweetURL where
 
 instance ToJSON TweetURL where
     toJSON u = object' [ "url" .= url u ] [ "display_url" .=? displayUrl u
-                                          , "expanded_url" .=? longUrl u ]
+                                          , "expanded_url" .=? expandedUrl u ]
 
 newtype TweetHashtag = TweetHashtag { text :: T.Text }
     deriving (Eq, Show)
