@@ -19,7 +19,7 @@ import Data.Monoid
 
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as Aeson
-import Data.Aeson.Types ((.=), (.:), (.:?), FromJSON(..), ToJSON(..))
+import Data.Aeson.Types ((.=), (.=?), (.:), (.:?), FromJSON(..), ToJSON(..))
 import qualified Data.Aeson.Parser as Aeson
 
 import qualified Data.Text as T
@@ -28,12 +28,6 @@ import Data.Maybe (fromJust, catMaybes)
 import qualified Data.Time.Format as DT
 import qualified Data.Time.Clock as DT
 import System.Locale (defaultTimeLocale)
-
-(.=?) :: ToJSON a => T.Text -> Maybe a -> Maybe Aeson.Pair
-_ .=? Nothing = Nothing
-name .=? (Just x) = Just $ name .= x
-
-object' a b = Aeson.object $ a ++ catMaybes b
 
 instance FromJSON URI where
     parseJSON (Aeson.String v) = case (parseURI . T.unpack) v of
@@ -57,8 +51,9 @@ instance FromJSON TweetURL where
     parseJSON _ = fail "Wrong thing"
 
 instance ToJSON TweetURL where
-    toJSON u = object' [ "url" .= url u ] [ "display_url" .=? displayUrl u
-                                          , "expanded_url" .=? expandedUrl u ]
+    toJSON u = Aeson.object [ "url" .= url u
+                            , "display_url" .=? displayUrl u
+                            , "expanded_url" .=? expandedUrl u ]
 
 newtype TweetHashtag = TweetHashtag { text :: T.Text }
     deriving (Eq, Show)
@@ -280,18 +275,18 @@ instance FromJSON Tweet where
     parseJSON _ = fail "Wrong thing"
 
 instance ToJSON Tweet where
-    toJSON v = object' [ "id_str" .= t_id v
-                       , "source" .= t_source v
-                       , "user" .= t_user v
-                       , "text" .= t_text v
-                       , "created_at" .= t_created_at v
-                       , "entities" .= t_entities v
-                       , "truncated" .= t_truncated v ]
-                       [ "in_reply_to_status_id" .=? t_reply_status v
-                       , "in_reply_to_user_id" .=? t_reply_user v
-                       , "in_reply_to_screen_name" .=? t_reply_screenname v
-                       , "retweeted_status" .=? t_retweet v
-                       ]
+    toJSON v = Aeson.object [ "id_str" .= t_id v
+                            , "source" .= t_source v
+                            , "user" .= t_user v
+                            , "text" .= t_text v
+                            , "created_at" .= t_created_at v
+                            , "entities" .= t_entities v
+                            , "truncated" .= t_truncated v
+                            , "in_reply_to_status_id" .=? t_reply_status v
+                            , "in_reply_to_user_id" .=? t_reply_user v
+                            , "in_reply_to_screen_name" .=? t_reply_screenname v
+                            , "retweeted_status" .=? t_retweet v
+                            ]
 
 instance Monoid Tweet where
     mappend = const

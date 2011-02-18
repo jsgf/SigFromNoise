@@ -14,7 +14,7 @@ import Data.Monoid (Monoid(..))
 import qualified Data.Attoparsec.Enumerator as AE
 
 import qualified Data.Aeson as Aeson
-import           Data.Aeson ((.:), (.=))
+import           Data.Aeson ((.:), (.=), (./))
 import qualified Data.Map as M
 
 import qualified Data.Enumerator as DE
@@ -29,13 +29,18 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LC8
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Base64 as B64
-import qualified Network.Riak as R
+
+import qualified Network.Riak.Basic as R (connect, delete, foldKeys)
+import qualified Network.Riak.JSON as R (json, plain)
 import qualified Network.Riak.Types as R
+import qualified Network.Riak.Content as R (Content(..), Link, link)
+import qualified Network.Riak.Value.Monoid as R
 
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.List
 import Data.Maybe (fromMaybe)
+import qualified Data.Sequence as S
 
 import Network.Twitter.Types
 
@@ -71,14 +76,20 @@ userKey = idToKey . tu_id
 
   This should probably use Riak links for better querying...
 -}
+
+addlinks :: R.IsContent a => a -> [R.Link] -> R.Content
+addlinks v l = c { R.links = R.links c `mappend` S.fromList l }
+    where c = R.toContent v
+
 stashTweet :: R.Connection -> Tweet -> IO ()
-stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing t R.Default R.Default
+stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing jt R.Default R.Default
                     R.put c "TweetUsers" (userKey user) Nothing tweetid R.Default R.Default
                     R.putMany c "TweetMentions" mentions R.Default R.Default
                     R.putMany c "TweetURLs" urls R.Default R.Default
                     return ()
-                    where user = t_user t
-                          tweetid = [t_id t]
+                    where jt = R.json t
+                          user = t_user t
+                          tweetid = R.json [t_id t]
                           mentions = [ (userKey u, Nothing, tweetid) | u <- (te_mentions . t_entities) t ]
                           urls = [ (urlkey $ besturl u, Nothing, tweetid) | u <- (te_urls . t_entities) t ]
                           urlkey = LC8.pack . (escapeURIString (/='/')) . show
@@ -86,19 +97,13 @@ stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing t R.Default R.Default
 
 untilDone = whileM_ $ liftM not DE.isEOF
 
-(.>) :: Aeson.Value -> T.Text -> Aeson.Value
-(Aeson.Object o) .> k = case M.lookup k o of
-                          Nothing -> Aeson.Null
-                          Just v -> v
-_ .> _ = Aeson.Null
-
 httpiter conn st _ | st == W.status200 = untilDone go
                    | otherwise = DE.throwError $ HE.StatusCodeException (W.statusCode st) (LBS.fromChunks [W.statusMessage st])
     where
       go = do
             x <- AE.iterParser Aeson.json
 
-            case x .> "delete" .> "status" .> "id_str" of
+            case x ./ "delete" ./ "status" ./ "id_str" of
               (Aeson.String str) -> liftIO $ do
                                       putStrLn $ "Delete status " ++ show str
                                       deletekeys conn "Tweets" [key]
@@ -137,9 +142,10 @@ main = do
 
   auth <- R.get r_conn "admin" "basicauth" R.Default
   case auth of
-    Just (a, _) -> do
+    Just (ja, _) -> do
               request <- basicauth (ba_user a) (ba_pass a) <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
               withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
+                  where a = R.plain ja
 
     Nothing -> putStrLn "Can't find auth details in admin/basicauth"
 
@@ -156,6 +162,16 @@ deleteall c b = do keys <- allkeys c b
 countkeys :: R.Connection -> R.Bucket -> IO Int
 countkeys c b = do keys <- allkeys c b
                    return $ length keys
+
+wipeeverything = do c <- riak_conn
+                    putStrLn "Wiping Tweets"
+                    deleteall c "Tweets"
+                    putStrLn "Wiping TweetUsers"
+                    deleteall c "TweetUsers"
+                    putStrLn "Wiping TweetMentions"
+                    deleteall c "TweetMentions"
+                    putStrLn "Wiping TweetURLs"
+                    deleteall c "TweetURLs"
 
 {-
 -- Convert a Network.OAuth.Http.Request into a Network.HTTP.Enumerator.Request
