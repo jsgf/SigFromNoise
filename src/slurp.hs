@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, RankNTypes #-}
 
 module Main (main) where
 
@@ -7,15 +7,13 @@ import System.Environment (getArgs)
 import Control.Monad
 import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Loops (whileM_)
-import Control.Applicative ((<$>), (<*>), (<|>), empty, pure)
-import Control.Arrow (first, second, (***))
+import Control.Applicative ((<$>), (<*>))
 import Data.Monoid (Monoid(..))
 
 import qualified Data.Attoparsec.Enumerator as AE
 
 import qualified Data.Aeson as Aeson
 import           Data.Aeson ((.:), (.=), (./))
-import qualified Data.Map as M
 
 import qualified Data.Enumerator as DE
 
@@ -24,7 +22,6 @@ import qualified Network.HTTP.Enumerator as HE
 import qualified Network.Wai as W
 import Network.URI (escapeURIString)
 
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LC8
 import qualified Data.ByteString.Char8 as C8
@@ -33,12 +30,10 @@ import qualified Data.ByteString.Base64 as B64
 import qualified Network.Riak.Basic as R (connect, delete, foldKeys)
 import qualified Network.Riak.JSON as R (json, plain)
 import qualified Network.Riak.Types as R
-import qualified Network.Riak.Content as R (Content(..), Link, link)
+import qualified Network.Riak.Content as R (Content(..), Link)
 import qualified Network.Riak.Value.Monoid as R
 
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
-import Data.List
 import Data.Maybe (fromMaybe)
 import qualified Data.Sequence as S
 
@@ -95,8 +90,10 @@ stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing jt R.Default R.Default
                           urlkey = LC8.pack . (escapeURIString (/='/')) . show
                           besturl u = fromMaybe (url u) (expandedUrl u)
 
+untilDone :: forall a a1. DE.Iteratee a1 IO a -> DE.Iteratee a1 IO ()
 untilDone = whileM_ $ liftM not DE.isEOF
 
+httpiter :: R.Connection -> W.Status -> t -> DE.Iteratee C8.ByteString IO ()
 httpiter conn st _ | st == W.status200 = untilDone go
                    | otherwise = DE.throwError $ HE.StatusCodeException (W.statusCode st) (LBS.fromChunks [W.statusMessage st])
     where
@@ -134,10 +131,11 @@ instance Monoid BasicAuth where
     mappend = const
     mempty = undefined
 
+riak_conn :: IO R.Connection
 riak_conn = R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
 
+main :: IO ()
 main = do
-  args <- getArgs
   r_conn <- riak_conn
 
   auth <- R.get r_conn "admin" "basicauth" R.Default
@@ -163,6 +161,7 @@ countkeys :: R.Connection -> R.Bucket -> IO Int
 countkeys c b = do keys <- allkeys c b
                    return $ length keys
 
+wipeeverything :: IO ()
 wipeeverything = do c <- riak_conn
                     putStrLn "Wiping Tweets"
                     deleteall c "Tweets"

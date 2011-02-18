@@ -18,12 +18,9 @@ import Control.Applicative ((<$>), (<*>), (<|>), pure)
 import Data.Monoid
 
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Types as Aeson
 import Data.Aeson.Types ((.=), (.=?), (.:), (.:?), FromJSON(..), ToJSON(..))
-import qualified Data.Aeson.Parser as Aeson
 
 import qualified Data.Text as T
-import Data.Maybe (fromJust, catMaybes)
 
 import qualified Data.Time.Format as DT
 import qualified Data.Time.Clock as DT
@@ -235,6 +232,7 @@ instance ToJSON TweetEntities where
 newtype TwitterTime = TwitterTime { timedate :: DT.UTCTime }
     deriving (Eq, Show)
 
+timeformat :: String
 timeformat = "%a %b %d %X %Z %Y"
 
 instance FromJSON TwitterTime where
@@ -291,9 +289,3 @@ instance ToJSON Tweet where
 instance Monoid Tweet where
     mappend = const
     mempty = undefined
-
-data TweetDelete  = TweetDelete { td_statusid :: TwitterID
-                                , td_userid :: TwitterID
-                                } deriving (Eq, Show)
-
-
