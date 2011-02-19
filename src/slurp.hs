@@ -108,9 +108,11 @@ stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing jt R.Default R.Default
                     return ()
                     where jt = mkContentT t
                           user = t_user t
-                          tweetid = mkContentT [t_id t]
-                          mentions = [ (userKey u, Nothing, tweetid) | u <- (te_mentions . t_entities) t ]
-                          urls = [ (urlkey $ besturl u, Nothing, tweetid) | u <- (te_urls . t_entities) t ]
+                          tweetid = mkContentT . Set.singleton . t_id $ t
+                          mentions = [ (userKey u, Nothing, tweetid)
+                                           | u <- (Set.toList . te_mentions . t_entities) t ]
+                          urls = [ (urlkey $ besturl u, Nothing, tweetid)
+                                       | u <- (Set.toList . te_urls . t_entities) t ]
                           urlkey = LC8.pack . (escapeURIString (not . flip elem "/?&%")) . show
                           besturl u = fromMaybe (url u) (expandedUrl u)
 

@@ -16,6 +16,7 @@ import Network.URI (URI(..), parseURI)
 import Control.Applicative ((<$>), (<*>), (<|>), pure)
 
 import Data.Monoid
+import qualified Data.Set as Set
 
 import qualified Data.Aeson as Aeson
 import Data.Aeson.Types ((.=), (.=?), (.:), (.:?), FromJSON(..), ToJSON(..))
@@ -25,6 +26,10 @@ import qualified Data.Text as T
 import qualified Data.Time.Format as DT
 import qualified Data.Time.Clock as DT
 import System.Locale (defaultTimeLocale)
+import Data.Function (on)
+
+instance Ord URI where
+    compare = compare `on` show
 
 instance FromJSON URI where
     parseJSON (Aeson.String v) = case (parseURI . T.unpack) v of
@@ -39,7 +44,7 @@ data TweetURL = TweetURL { url :: URI
                          , displayUrl :: Maybe T.Text
                          , expandedUrl :: Maybe URI
                          }
-                deriving (Eq, Show)
+                deriving (Eq, Show, Ord)
 
 instance FromJSON TweetURL where
     parseJSON (Aeson.Object v) = TweetURL <$> v .: "url"
@@ -53,14 +58,14 @@ instance ToJSON TweetURL where
                             , "expanded_url" .=? expandedUrl u ]
 
 newtype TweetHashtag = TweetHashtag { text :: T.Text }
-    deriving (Eq, Show)
+    deriving (Eq, Show, Ord)
 
 instance FromJSON TweetHashtag where
     parseJSON (Aeson.Object v) = TweetHashtag <$> v .: "text"
     parseJSON _ = fail "Wrong thing"
 
 newtype TwitterID = TwitterID { twitterid :: Integer }
-    deriving (Show, Eq)
+    deriving (Show, Eq, Ord)
 
 -- Parse a string or number into an ID, but Strings are preferable
 -- because Aeson looses precision on large Integers by using Double
@@ -83,7 +88,7 @@ data TwitterUser = TwitterUser { tu_screen_name :: T.Text
                                , tu_id :: TwitterID
                                , tu_verified :: Bool
                                , tu_protected :: Bool
-                               } deriving (Eq, Show)
+                               } deriving (Eq, Show, Ord)
 
 instance FromJSON TwitterUser where
     parseJSON (Aeson.Object v) = TwitterUser <$> v .: "screen_name"
@@ -136,7 +141,7 @@ data TwitterUserProfile = TwitterUserProfile { tup_id :: TwitterID
                                              , tup_profile_image_url :: Maybe URI
                                              , tup_profile_use_background_image :: Bool
 
-                                             } deriving (Show,Eq)
+                                             } deriving (Show, Eq, Ord)
 
 instance FromJSON TwitterUserProfile where
     parseJSON (Aeson.Object v) = TwitterUserProfile
@@ -207,15 +212,17 @@ instance ToJSON TwitterUserProfile where
                             ]
 
 data TweetRange = TweetRange Int Int
-                  deriving (Eq, Show)
+                  deriving (Eq, Show, Ord)
 
 instance ToJSON TweetRange where
     toJSON (TweetRange a b) = toJSON [a, b]
 
-data TweetEntities = TweetEntities { te_urls :: [ TweetURL ]
-                                   , te_hashtags :: [ TweetHashtag ] 
-                                   , te_mentions :: [ TwitterUser ]
-                                   } deriving (Eq, Show)
+data TweetEntities = TweetEntities { te_urls :: Set.Set TweetURL
+                                   , te_hashtags :: Set.Set TweetHashtag
+                                   , te_mentions :: Set.Set TwitterUser
+                                   } deriving (Eq, Show, Ord)
+
+emptyEntities = TweetEntities Set.empty Set.empty Set.empty
 
 instance FromJSON TweetEntities where
     parseJSON (Aeson.Object v) = TweetEntities <$> v .: "urls"
@@ -263,7 +270,7 @@ instance FromJSON Tweet where
                                        <*> v .: "source"
                                        <*> v .: "user"
                                        <*> v .: "truncated"
-                                       <*> (v .: "entities" <|> pure (TweetEntities [] [] []))
+                                       <*> (v .: "entities" <|> pure emptyEntities)
                                        <*> v .: "text"
                                        <*> v .: "created_at"
                                        <*> v .:? "in_reply_to_status_id"
