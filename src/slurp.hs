@@ -111,7 +111,7 @@ stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing jt R.Default R.Default
                           tweetid = mkContentT [t_id t]
                           mentions = [ (userKey u, Nothing, tweetid) | u <- (te_mentions . t_entities) t ]
                           urls = [ (urlkey $ besturl u, Nothing, tweetid) | u <- (te_urls . t_entities) t ]
-                          urlkey = LC8.pack . (escapeURIString (/='/')) . show
+                          urlkey = LC8.pack . (escapeURIString (not . flip elem "/?&%")) . show
                           besturl u = fromMaybe (url u) (expandedUrl u)
 
 untilDone :: forall a a1. DE.Iteratee a1 IO a -> DE.Iteratee a1 IO ()
@@ -119,14 +119,16 @@ untilDone = whileM_ $ liftM not DE.isEOF
 
 httpiter :: R.Connection -> W.Status -> t -> DE.Iteratee C8.ByteString IO ()
 httpiter conn st _ | st == W.status200 = untilDone go
-                   | otherwise = DE.throwError $ HE.StatusCodeException (W.statusCode st) (LBS.fromChunks [W.statusMessage st])
+                   | otherwise =
+                       DE.throwError $ HE.StatusCodeException (W.statusCode st)
+                                                (LBS.fromChunks [W.statusMessage st])
     where
       go = do
             x <- AE.iterParser Aeson.json
 
             case x ./ "delete" ./ "status" ./ "id_str" of
               (Aeson.String str) -> liftIO $ do
-                                      putStrLn $ "Delete status " ++ show str
+                                      putStrLn $ "Delete status " ++ T.unpack str
                                       deletekeys conn "Tweets" [key]
                                              where key =  (LC8.pack . T.unpack) str
               _ -> case Aeson.fromJSON x :: Aeson.Result Tweet of
