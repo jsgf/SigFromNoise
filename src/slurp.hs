@@ -28,14 +28,15 @@ import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Base64 as B64
 
 import qualified Network.Riak.Basic as R (connect, delete, foldKeys)
-import qualified Network.Riak.JSON as R (json, plain)
 import qualified Network.Riak.Types as R
-import qualified Network.Riak.Content as R (Content(..), Link)
+import qualified Network.Riak.Content as R (Content(..), Link, link)
 import qualified Network.Riak.Value.Monoid as R
 
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe)
 import qualified Data.Sequence as S
+import qualified Data.Set as Set
+import Data.Function (on)
 
 import Network.Twitter.Types
 
@@ -62,6 +63,29 @@ userProfileKey = idToKey . tup_id
 userKey :: TwitterUser -> R.Key
 userKey = idToKey . tu_id
 
+data ContentT a = ContentT { content :: a
+                           , links :: Set.Set R.Link
+                           --, usermeta :: S.Seq R.Pair
+                           } deriving (Eq, Show)
+
+mkContentT :: a -> ContentT a
+mkContentT a = ContentT a Set.empty
+
+addlinks :: ContentT a -> [R.Link] -> ContentT a
+addlinks ct l = ct { links = links ct `mappend` Set.fromList l }
+
+instance Monoid a => Monoid (ContentT a) where
+    mempty = ContentT mempty Set.empty
+    a `mappend` b = ContentT ((mappend `on` content) a b) ((mappend `on` links) a b)
+
+instance Functor ContentT where
+    fmap f a = a { content = f (content a) }
+
+instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
+    parseContent c = mkContentT `fmap` (R.parseContent c >>= Aeson.parseJSON)
+    toContent o = c { R.links = (S.fromList . Set.toList . links) o }
+        where c = (R.toContent . Aeson.toJSON . content) o
+
 {-
   Store tweet to database, along with extra info:
   - Tweets/: TweetID -> Tweet           -- tweets themselves
@@ -72,19 +96,15 @@ userKey = idToKey . tu_id
   This should probably use Riak links for better querying...
 -}
 
-addlinks :: R.IsContent a => a -> [R.Link] -> R.Content
-addlinks v l = c { R.links = R.links c `mappend` S.fromList l }
-    where c = R.toContent v
-
 stashTweet :: R.Connection -> Tweet -> IO ()
 stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing jt R.Default R.Default
                     R.put c "TweetUsers" (userKey user) Nothing tweetid R.Default R.Default
                     R.putMany c "TweetMentions" mentions R.Default R.Default
                     R.putMany c "TweetURLs" urls R.Default R.Default
                     return ()
-                    where jt = R.json t
+                    where jt = mkContentT t
                           user = t_user t
-                          tweetid = R.json [t_id t]
+                          tweetid = mkContentT [t_id t]
                           mentions = [ (userKey u, Nothing, tweetid) | u <- (te_mentions . t_entities) t ]
                           urls = [ (urlkey $ besturl u, Nothing, tweetid) | u <- (te_urls . t_entities) t ]
                           urlkey = LC8.pack . (escapeURIString (/='/')) . show
@@ -143,7 +163,7 @@ main = do
     Just (ja, _) -> do
               request <- basicauth (ba_user a) (ba_pass a) <$> HE.parseUrl "http://stream.twitter.com/1/statuses/sample.json" 
               withSocketsDo . HE.withHttpEnumerator . DE.run_ $ HE.httpRedirect request (httpiter r_conn)
-                  where a = R.plain ja
+                  where a = content ja
 
     Nothing -> putStrLn "Can't find auth details in admin/basicauth"
 
