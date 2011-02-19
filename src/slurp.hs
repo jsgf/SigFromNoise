@@ -93,6 +93,10 @@ instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
   - TweetMentions/: UserID -> [TweetID] -- users mentioned in tweets
   - TweetURLs/: URL -> [TweetID]        -- urls referenced by tweets
 
+  Other buckets:
+  - TwitterUserProfiles/: UserID -> TwitterUserProfile  -- complete profile info of user
+  - Users/: UserID -> User                              -- local user info (User ID same as Twitter's)
+
   This should probably use Riak links for better querying...
 -}
 
