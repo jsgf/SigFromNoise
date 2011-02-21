@@ -7,7 +7,7 @@ import System.Environment (getArgs)
 import Control.Monad
 import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Loops (whileM_)
-import Control.Applicative ((<$>), (<*>))
+import Control.Applicative (Applicative(..), (<$>), (<*>))
 import Data.Monoid (Monoid(..))
 
 import qualified Data.Attoparsec.Enumerator as AE
@@ -80,6 +80,10 @@ instance Monoid a => Monoid (ContentT a) where
 
 instance Functor ContentT where
     fmap f a = a { content = f (content a) }
+
+instance Applicative ContentT where
+    pure = mkContentT
+    (ContentT f l1) <*> (ContentT x l2) = ContentT (f x) (l1 `mappend` l2)
 
 instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
     parseContent c = mkContentT `fmap` (R.parseContent c >>= Aeson.parseJSON)
