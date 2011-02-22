@@ -88,7 +88,7 @@ instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
         where c = (R.toContent . Aeson.toJSON . content) o
 
 addlinks :: [R.Link] -> ContentT a -> ContentT a
-addlinks l ct = ct { links = links ct `mappend` Set.fromList l }
+addlinks l ct = ct -- { links = links ct `mappend` Set.fromList l }
 
 {-
   Store tweet to database, along with extra info:
