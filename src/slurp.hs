@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, RankNTypes #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
 
 module Main (main) where
 
@@ -71,9 +71,6 @@ data ContentT a = ContentT { content :: a
 mkContentT :: a -> ContentT a
 mkContentT a = ContentT a Set.empty
 
-addlinks :: ContentT a -> [R.Link] -> ContentT a
-addlinks ct l = ct { links = links ct `mappend` Set.fromList l }
-
 instance Monoid a => Monoid (ContentT a) where
     mempty = ContentT mempty Set.empty
     a `mappend` b = ContentT ((mappend `on` content) a b) ((mappend `on` links) a b)
@@ -90,6 +87,9 @@ instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
     toContent o = c { R.links = (S.fromList . Set.toList . links) o }
         where c = (R.toContent . Aeson.toJSON . content) o
 
+addlinks :: [R.Link] -> ContentT a -> ContentT a
+addlinks l ct = ct { links = links ct `mappend` Set.fromList l }
+
 {-
   Store tweet to database, along with extra info:
   - Tweets/: TweetID -> Tweet           -- tweets themselves
@@ -104,21 +104,59 @@ instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
   This should probably use Riak links for better querying...
 -}
 
+urlkeys :: Tweet -> [R.Key]
+urlkeys t = (urlkey . besturl) `fmap` (Set.toList . te_urls . t_entities) t
+    where urlkey = LC8.pack . (escapeURIString (not . flip elem "/?&%")) . show
+          besturl u = fromMaybe (url u) (expandedUrl u)
+
+mentionkeys :: Tweet -> [R.Key]
+mentionkeys t = userKey `fmap` (Set.toList . te_mentions . t_entities) t
+
+getMulti :: (Monoid c, R.IsContent c) => R.Connection -> R.Bucket -> [R.Key] -> IO [Maybe (c, R.VClock)]
+getMulti c b k = R.getMany c b k R.Default
+
+updateMulti :: forall c. (Show c, Eq c, Monoid c, R.IsContent c) =>
+               R.Connection -> R.Bucket -> [R.Key] -> [c] -> IO [(c, R.VClock)]
+updateMulti c b k v = do vc <- map (snd `fmap`) `liftM` (getMulti c b k :: IO [Maybe (c, R.VClock)])
+                         let kvcv = zip3 k vc v
+                         putStrLn $ "Updating " ++ show b ++ " with " ++ show kvcv
+                         R.putMany c b kvcv R.Default R.Default
+
+getUrls :: R.Connection -> [R.Key] -> IO [Maybe (ContentT TwitterID, R.VClock)]
+getUrls c k = getMulti c "TweetURLs" k
+
+type TweetIDs = Set.Set TwitterID
+
+updateUrls :: R.Connection -> [R.Key] -> [ContentT TweetIDs] -> IO [(ContentT TweetIDs, R.VClock)]
+updateUrls c k v = updateMulti c "TweetURLs" k v
+
+getMentions :: R.Connection -> [R.Key] -> IO [Maybe (ContentT TweetIDs, R.VClock)]
+getMentions c k = getMulti c "TweetMentions" k
+
+updateMentions :: R.Connection -> [R.Key] -> [ContentT TweetIDs] -> IO [(ContentT TweetIDs, R.VClock)]
+updateMentions c k v = updateMulti c "TweetMentions" k v
+
+updateTweet :: R.Connection -> R.Key -> ContentT Tweet -> IO (ContentT Tweet, R.VClock)
+updateTweet c k v = head `liftM` updateMulti c "Tweets" [k] [v]
+
+updateTweetUser :: R.Connection -> R.Key -> ContentT TweetIDs -> IO (ContentT TweetIDs, R.VClock)
+updateTweetUser c k v = head `liftM` updateMulti c "TweetUsers" [k] [v]
+
 stashTweet :: R.Connection -> Tweet -> IO ()
-stashTweet c t = do R.put c "Tweets" (tweetKey t) Nothing jt R.Default R.Default
-                    R.put c "TweetUsers" (userKey user) Nothing tweetid R.Default R.Default
-                    R.putMany c "TweetMentions" mentions R.Default R.Default
-                    R.putMany c "TweetURLs" urls R.Default R.Default
+stashTweet c t = do updateTweet c (tweetKey t) jt
+                    updateTweetUser c (userKey . t_user $ t) tweetid
+                    updateUrls c urls (repeat tweetid)
+                    updateMentions c mentions (repeat tweetid)
                     return ()
-                    where jt = mkContentT t
-                          user = t_user t
-                          tweetid = mkContentT . Set.singleton . t_id $ t
-                          mentions = [ (userKey u, Nothing, tweetid)
-                                           | u <- (Set.toList . te_mentions . t_entities) t ]
-                          urls = [ (urlkey $ besturl u, Nothing, tweetid)
-                                       | u <- (Set.toList . te_urls . t_entities) t ]
-                          urlkey = LC8.pack . (escapeURIString (not . flip elem "/?&%")) . show
-                          besturl u = fromMaybe (url u) (expandedUrl u)
+                    where jt = addlinks (mentionlinks ++ urllinks) $ mkContentT t
+                          tweetlink = R.link "Tweets" (tweetKey t) "tweet"
+                          tweetid :: ContentT (Set.Set TwitterID)
+                          tweetid = addlinks [tweetlink] $ (mkContentT . Set.singleton . t_id $ t)
+
+                          mentions = mentionkeys t
+                          mentionlinks = map (\k -> R.link "TweetUsers" k "mention") mentions
+                          urls = urlkeys t
+                          urllinks = map (\k -> R.link "TweetURLs" k "url") urls
 
 untilDone :: forall a a1. DE.Iteratee a1 IO a -> DE.Iteratee a1 IO ()
 untilDone = whileM_ $ liftM not DE.isEOF

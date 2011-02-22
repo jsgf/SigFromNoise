@@ -79,6 +79,10 @@ instance FromJSON TwitterID where
 instance ToJSON TwitterID where
     toJSON = toJSON . show . twitterid
 
+instance Monoid TwitterID where
+    mempty = undefined
+    mappend a _ = a
+
 instance ToJSON TweetHashtag where
     toJSON t = Aeson.object [ "text" .= text t ]
 
@@ -294,5 +298,5 @@ instance ToJSON Tweet where
                             ]
 
 instance Monoid Tweet where
-    mappend = const
+    mappend a _ = a
     mempty = undefined
