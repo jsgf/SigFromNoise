@@ -90,6 +90,10 @@ instance (Monoid a) => Monoid (ContentT a) where
     mempty = error "no mempty for ContentT a"
     a `mappend` b = ContentT ((mappend `on` content) a b) ((mappend `on` links) a b)
 
+    -- avoid using mempty in mconcat
+    mconcat [a] = a
+    mconcat (a:as) = foldr mappend a as
+
 instance Functor ContentT where
     fmap f a = a { content = f (content a) }
 
