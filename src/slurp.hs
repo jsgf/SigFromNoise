@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables, ViewPatterns #-}
 
 module Main (main) where
 
@@ -33,7 +33,7 @@ import qualified Network.Riak.Content as R (Content(..), Link, link)
 import qualified Network.Riak.Value.Monoid as R
 
 import qualified Data.Text as T
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Sequence as S
 import qualified Data.Set as Set
 import Data.Function (on)
@@ -142,13 +142,23 @@ updateTweet c k v = head `liftM` updateMulti c "Tweets" [k] [v]
 updateTweetUser :: R.Connection -> R.Key -> ContentT TweetIDs -> IO (ContentT TweetIDs, R.VClock)
 updateTweetUser c k v = head `liftM` updateMulti c "TweetUsers" [k] [v]
 
+addTweetLinks :: ContentT Tweet -> ContentT Tweet
+addTweetLinks ct@(content -> t) = addlinks (catMaybes . map (mklink t) $ l) ct
+    where 
+      mklink t (f, b, r) = R.link <$> pure b <*> f t <*> pure r
+      l = [ (fmap idToKey . t_reply_status, "Tweets", "reply")
+          , (fmap tweetKey . t_retweet, "Tweets", "retweet") ]
+
+mkTweet :: Tweet -> ContentT Tweet
+mkTweet = addTweetLinks . mkContentT
+
 stashTweet :: R.Connection -> Tweet -> IO ()
 stashTweet c t = do updateTweet c (tweetKey t) jt
                     updateTweetUser c (userKey . t_user $ t) tweetid
                     updateUrls c urls (repeat tweetid)
                     updateMentions c mentions (repeat tweetid)
                     return ()
-                    where jt = addlinks (mentionlinks ++ urllinks) $ mkContentT t
+                    where jt = addlinks (mentionlinks ++ urllinks) . mkTweet $ t
                           tweetlink = R.link "Tweets" (tweetKey t) "tweet"
                           tweetid :: ContentT (Set.Set TwitterID)
                           tweetid = addlinks [tweetlink] $ (mkContentT . Set.singleton . t_id $ t)
