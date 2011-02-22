@@ -4,6 +4,8 @@ module Main (main) where
 
 import System.Environment (getArgs)
 
+import Debug.Trace
+
 import Control.Monad
 import Control.Monad.Trans (MonadIO, liftIO)
 import Control.Monad.Loops (whileM_)
@@ -35,6 +37,7 @@ import qualified Network.Riak.Value.Monoid as R
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Sequence as S
+import qualified Data.Foldable as F (toList)
 import qualified Data.Set as Set
 import Data.Function (on)
 
@@ -66,13 +69,25 @@ userKey = idToKey . tu_id
 data ContentT a = ContentT { content :: a
                            , links :: Set.Set R.Link
                            --, usermeta :: S.Seq R.Pair
-                           } deriving (Eq, Show)
+                           } deriving (Show)
+
+
+content_eq a b = -- trace ("eq content a: " ++ show (content a) ++ " b:" ++ show (content b) ++ " eq: " ++ show eq_content) $
+                 -- trace ("   links a: " ++ show (links a) ++ " b:" ++ show (links b) ++ " eq: " ++ show eq_links) $
+                 eq_links && eq_content
+    where eq_content = ((==) `on` content) a b
+          eq_links = ((==) `on` links) a b
+                 
+
+instance (Show a, Eq a) => Eq (ContentT a) where
+    (==) = content_eq
+
 
 mkContentT :: a -> ContentT a
 mkContentT a = ContentT a Set.empty
 
-instance Monoid a => Monoid (ContentT a) where
-    mempty = ContentT mempty Set.empty
+instance (Monoid a) => Monoid (ContentT a) where
+    mempty = error "no mempty for ContentT a"
     a `mappend` b = ContentT ((mappend `on` content) a b) ((mappend `on` links) a b)
 
 instance Functor ContentT where
@@ -83,12 +98,13 @@ instance Applicative ContentT where
     (ContentT f l1) <*> (ContentT x l2) = ContentT (f x) (l1 `mappend` l2)
 
 instance (Aeson.FromJSON a, Aeson.ToJSON a) => R.IsContent (ContentT a) where
-    parseContent c = mkContentT `fmap` (R.parseContent c >>= Aeson.parseJSON)
-    toContent o = c { R.links = (S.fromList . Set.toList . links) o }
+    parseContent c = mk `fmap` (R.parseContent c >>= Aeson.parseJSON)
+        where mk v = ContentT v (Set.fromList . F.toList . R.links $ c)
+    toContent o = c { R.links = (S.fromList . Set.toAscList . links) o }
         where c = (R.toContent . Aeson.toJSON . content) o
 
 addlinks :: [R.Link] -> ContentT a -> ContentT a
-addlinks l ct = ct -- { links = links ct `mappend` Set.fromList l }
+addlinks l ct = ct { links = links ct `mappend` Set.fromList l }
 
 {-
   Store tweet to database, along with extra info:
@@ -105,22 +121,43 @@ addlinks l ct = ct -- { links = links ct `mappend` Set.fromList l }
 -}
 
 urlkeys :: Tweet -> [R.Key]
-urlkeys t = (urlkey . besturl) `fmap` (Set.toList . te_urls . t_entities) t
+urlkeys t = (urlkey . besturl) `fmap` (Set.toAscList . te_urls . t_entities) t
     where urlkey = LC8.pack . (escapeURIString (not . flip elem "/?&%")) . show
           besturl u = fromMaybe (url u) (expandedUrl u)
 
 mentionkeys :: Tweet -> [R.Key]
-mentionkeys t = userKey `fmap` (Set.toList . te_mentions . t_entities) t
+mentionkeys t = userKey `fmap` (Set.toAscList . te_mentions . t_entities) t
 
 getMulti :: (Monoid c, R.IsContent c) => R.Connection -> R.Bucket -> [R.Key] -> IO [Maybe (c, R.VClock)]
 getMulti c b k = R.getMany c b k R.Default
 
-updateMulti :: forall c. (Show c, Eq c, Monoid c, R.IsContent c) =>
+
+-- Do a read-modify-update by using the Monoid instance to perform an
+-- update to an existing entry (if any)
+updateMulti' :: (Show c, Eq c, Monoid c, R.IsContent c) =>
+                R.Connection -> R.Bucket -> [R.Key] -> [c] -> IO [(R.Key, Maybe R.VClock, c)]
+updateMulti' c b k v = do orig <- getMulti c b k
+                          --putStrLn $ "Original " ++ show orig
+                          let vc = map (snd `fmap`) orig
+                          let v' = zipWith combine v $ map (fst `fmap`) orig
+                          let kvcv = zip3 k vc v'
+                          --putStrLn $ "Updating " ++ show b ++ " with " ++ show kvcv
+                          return kvcv
+    where
+      combine :: Monoid a => a -> Maybe a -> a
+      combine a Nothing = a
+      combine a (Just b) = a `mappend` b
+
+updateMulti :: (Show c, Eq c, Monoid c, R.IsContent c) =>
                R.Connection -> R.Bucket -> [R.Key] -> [c] -> IO [(c, R.VClock)]
-updateMulti c b k v = do vc <- map (snd `fmap`) `liftM` (getMulti c b k :: IO [Maybe (c, R.VClock)])
-                         let kvcv = zip3 k vc v
-                         putStrLn $ "Updating " ++ show b ++ " with " ++ show kvcv
+updateMulti c b k v = do kvcv <- updateMulti' c b k v
                          R.putMany c b kvcv R.Default R.Default
+
+updateMulti_ :: (Show c, Eq c, Monoid c, R.IsContent c) =>
+               R.Connection -> R.Bucket -> [R.Key] -> [c] -> IO ()
+updateMulti_ c b k v = do kvcv <- updateMulti' c b k v
+                          R.putMany_ c b kvcv R.Default R.Default
+
 
 getUrls :: R.Connection -> [R.Key] -> IO [Maybe (ContentT TwitterID, R.VClock)]
 getUrls c k = getMulti c "TweetURLs" k
@@ -130,11 +167,17 @@ type TweetIDs = Set.Set TwitterID
 updateUrls :: R.Connection -> [R.Key] -> [ContentT TweetIDs] -> IO [(ContentT TweetIDs, R.VClock)]
 updateUrls c k v = updateMulti c "TweetURLs" k v
 
+updateUrls_ :: R.Connection -> [R.Key] -> [ContentT TweetIDs] -> IO ()
+updateUrls_ c k v = updateMulti_ c "TweetURLs" k v
+
 getMentions :: R.Connection -> [R.Key] -> IO [Maybe (ContentT TweetIDs, R.VClock)]
 getMentions c k = getMulti c "TweetMentions" k
 
 updateMentions :: R.Connection -> [R.Key] -> [ContentT TweetIDs] -> IO [(ContentT TweetIDs, R.VClock)]
 updateMentions c k v = updateMulti c "TweetMentions" k v
+
+updateMentions_ :: R.Connection -> [R.Key] -> [ContentT TweetIDs] -> IO ()
+updateMentions_ c k v = updateMulti_ c "TweetMentions" k v
 
 updateTweet :: R.Connection -> R.Key -> ContentT Tweet -> IO (ContentT Tweet, R.VClock)
 updateTweet c k v = head `liftM` updateMulti c "Tweets" [k] [v]
@@ -142,22 +185,29 @@ updateTweet c k v = head `liftM` updateMulti c "Tweets" [k] [v]
 updateTweetUser :: R.Connection -> R.Key -> ContentT TweetIDs -> IO (ContentT TweetIDs, R.VClock)
 updateTweetUser c k v = head `liftM` updateMulti c "TweetUsers" [k] [v]
 
+updateTweet_ :: R.Connection -> R.Key -> ContentT Tweet -> IO ()
+updateTweet_ c k v = updateMulti_ c "Tweets" [k] [v]
+
+updateTweetUser_ :: R.Connection -> R.Key -> ContentT TweetIDs -> IO ()
+updateTweetUser_ c k v = updateMulti_ c "TweetUsers" [k] [v]
+
 addTweetLinks :: ContentT Tweet -> ContentT Tweet
-addTweetLinks ct@(content -> t) = addlinks (catMaybes . map (mklink t) $ l) ct
+addTweetLinks ct@(content -> t) = addlinks (catMaybes . map mklink $ l) ct
     where 
-      mklink t (f, b, r) = R.link <$> pure b <*> f t <*> pure r
+      mklink (f, b, r) = R.link <$> pure b <*> f t <*> pure r
       l = [ (fmap idToKey . t_reply_status, "Tweets", "reply")
-          , (fmap tweetKey . t_retweet, "Tweets", "retweet") ]
+          , (fmap tweetKey . t_retweet, "Tweets", "retweet")
+          , (fmap userKey . Just . t_user, "TweetUsers", "user")
+          ]
 
 mkTweet :: Tweet -> ContentT Tweet
 mkTweet = addTweetLinks . mkContentT
 
 stashTweet :: R.Connection -> Tweet -> IO ()
-stashTweet c t = do updateTweet c (tweetKey t) jt
-                    updateTweetUser c (userKey . t_user $ t) tweetid
-                    updateUrls c urls (repeat tweetid)
-                    updateMentions c mentions (repeat tweetid)
-                    return ()
+stashTweet c t = do updateTweet_ c (tweetKey t) jt
+                    updateTweetUser_ c (userKey . t_user $ t) tweetid
+                    updateUrls_ c urls (repeat tweetid)
+                    updateMentions_ c mentions (repeat tweetid)
                     where jt = addlinks (mentionlinks ++ urllinks) . mkTweet $ t
                           tweetlink = R.link "Tweets" (tweetKey t) "tweet"
                           tweetid :: ContentT (Set.Set TwitterID)
@@ -209,7 +259,7 @@ instance Aeson.ToJSON BasicAuth where
 
 instance Monoid BasicAuth where
     mappend = const
-    mempty = undefined
+    mempty = error "no mempty for BasicAuth"
 
 riak_conn :: IO R.Connection
 riak_conn = R.connect $ R.Client "127.0.0.1" "8081" LBS.empty
